@@ -2,11 +2,35 @@ from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 import datetime
+import boto3
 
 
 # Mock database
 users = {}
 app = Flask(__name__)
+
+# Initialize the DynamoDB client
+dynamodb = boto3.resource('dynamodb')
+data_table = dynamodb.Table("DiaLog_Data")
+
+class UserClient:
+    def __init__(self, user_id):
+        self.user_id = user_id
+
+    def query_by_date_range(self, data_type, start_date, end_date):
+        try:
+            response = data_table.query(
+                KeyConditionExpression=(
+                        Key('userid#datatype').eq(f'{self.user_id}#{data_type}') &
+                        Key('date').between(start_date, end_date)
+                ),
+                ProjectionExpression="date, value", # only get date and value
+                Limit = 500 # limit number of items per request
+            )
+            return response.get('Items', [])
+        except Exception as e:
+            print(f"Error querying data: {e}")
+            return None
 
 # Configure Flask-JWT and SQLAlchemy
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://username:password@localhost/db_name'  # Update with your PostgreSQL URI
@@ -118,6 +142,36 @@ def export_user(user_id):
         f.write(user_data)
 
     return jsonify({"message": "User data exported successfully!", "file": file_path}), 200
+
+@app.route('/graphs', methods=['GET'])
+@jwt_required()
+def gen_graph():
+    data = request.json()
+    start = data.get("start")
+    end = data.get("end")
+
+    current_user_id = get_jwt_identity()  # Extract user_id from the JWT
+    user = UserClient(current_user_id)  # Create a User instance
+
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    if not start_date or not end_date:
+        return jsonify({"error": "Missing required parameters"}), 400
+
+    data = user.query_data(start_date, end_date)
+    if data is None:
+        return jsonify({"error": "Failed to query data"}), 500
+
+    return jsonify({"data": data})
+
+@app.route('/alert-doctor', methods=['POST'])
+def send_alert(bloodSugarLevel):
+    # messaging API
+    pass
+
+# send notifications accroding to user's personal settings
+
 
 if __name__ == '__main__':
     app.run(debug=True)
